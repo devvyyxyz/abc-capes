@@ -89,4 +89,4 @@ _coming soon_
 ![Birthday Cape](https://cdn.modrinth.com/data/cached_images/57fc5cf65f6f6a8fc494963b53bb280a07dc901a.png)
 
 
-_All capes can be found on [the Minecraft wiki](https://minecraft.wiki/w/Cape)._
+_All capes from the game can be found on [the Minecraft wiki](https://minecraft.wiki/w/Cape)._
