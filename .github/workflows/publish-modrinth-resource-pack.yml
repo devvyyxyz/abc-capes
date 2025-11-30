@@ -399,16 +399,148 @@ jobs:
           fi
 
           # Build JSON arrays robustly and output compact JSON (-c).
-          GAME_JSON="$(printf '%s' "$GAME_VERSIONS_RAW" | jq -R -s 'split(",") | map(.|gsub("^\\s+|\\s+$";"")) | map(select(length>0))')"
+          # Determine release/tag/title/body for Modrinth fields.
+          # Prefer explicit GitHub release payload when available, else fall back to tag ref or previously-determined version.
+          RELEASE_TAG=""
+          RELEASE_TITLE=""
+          RELEASE_BODY=""
+
+          if [ "${GITHUB_EVENT_NAME:-}" = "release" ] && [ -f "${GITHUB_EVENT_PATH:-}" ]; then
+            RELEASE_TAG="$(jq -r '.release.tag_name // empty' "$GITHUB_EVENT_PATH" 2>/dev/null || true)"
+            RELEASE_TITLE="$(jq -r '.release.name // empty' "$GITHUB_EVENT_PATH" 2>/dev/null || true)"
+            RELEASE_BODY="$(jq -r '.release.body // empty' "$GITHUB_EVENT_PATH" 2>/dev/null || true)"
+          fi
+
+          if [ -z "$RELEASE_TAG" ] && [[ "${GITHUB_REF:-}" == refs/tags/* ]]; then
+            RELEASE_TAG="${GITHUB_REF#refs/tags/}"
+          fi
+
+          # As a final fallback, use the earlier-determined version
+          if [ -z "$RELEASE_TAG" ]; then
+            RELEASE_TAG="$VERSION"
+          fi
+
+          # If we don't have a release title/body yet but we do have a tag, try to fetch the GitHub release by tag
+          if [ -z "$RELEASE_TITLE" ] || [ -z "$RELEASE_BODY" ]; then
+            if [ -n "$RELEASE_TAG" ] && [ -n "${GITHUB_REPOSITORY:-}" ]; then
+              GH_API_URL="https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}"
+              RESP="$(curl -sS -H "Authorization: token ${GITHUB_TOKEN}" "$GH_API_URL" || true)"
+              # only populate if valid JSON with expected fields
+              if echo "$RESP" | jq -e '.name? // .body? // empty' >/dev/null 2>&1; then
+                if [ -z "$RELEASE_TITLE" ]; then
+                  RELEASE_TITLE="$(echo "$RESP" | jq -r '.name // empty' || true)"
+                fi
+                if [ -z "$RELEASE_BODY" ]; then
+                  RELEASE_BODY="$(echo "$RESP" | jq -r '.body // empty' || true)"
+                fi
+              fi
+            fi
+          fi
+
+          # Use release title if present, else fall back to repo+tag
+          REPO_NAME="${GITHUB_REPOSITORY##*/}"
+          if [ -n "$RELEASE_TITLE" ]; then
+            MODRINTH_NAME="$RELEASE_TITLE"
+          else
+            MODRINTH_NAME="${REPO_NAME} ${RELEASE_TAG}"
+          fi
+
+          # Use release body if present, else existing changelog
+          if [ -n "$RELEASE_BODY" ]; then
+            MODRINTH_CHANGELOG="$RELEASE_BODY"
+          else
+            MODRINTH_CHANGELOG="$CHANGELOG"
+          fi
+
+          # Determine game versions from pack.mcmeta when available, else fall back to input.
+          # Use pack.min_format/max_format when present (newer format), otherwise use pack.pack_format.
+          RESOURCEPACK_PATH="${{ steps.detect.outputs.resourcepack_path }}"
+          GAME_JSON=""
+
+          map_pack_format_to_version() {
+            pf="$1"
+            # Map representative pack_format numbers to Minecraft game version strings (based on https://minecraft.wiki/w/Pack_format)
+            case "$pf" in
+              1) echo '"1.6.1"' ;;
+              2) echo '"1.9"' ;;
+              3) echo '"1.11"' ;;
+              4) echo '"1.13"' ;;
+              5) echo '"1.15"' ;;
+              6) echo '"1.16.2"' ;;
+              7) echo '"1.17"' ;;
+              8) echo '"1.18"' ;;
+              9) echo '"1.19"' ;;
+              10) echo '"1.19.3"' ;;
+              11) echo '"1.19.3"' ;;
+              12) echo '"1.19.3"' ;;
+              13) echo '"1.19.4"' ;;
+              14) echo '"1.20"' ;;
+              15) echo '"1.20"' ;;
+              16) echo '"1.20.2"' ;;
+              17) echo '"1.20.2"' ;;
+              18) echo '"1.20.2"' ;;
+              21) echo '"1.20.3"' ;;
+              22) echo '"1.20.3"' ;;
+              26) echo '"1.20.4"' ;;
+              31) echo '"1.20.5"' ;;
+              32) echo '"1.20.5"' ;;
+              34) echo '"1.21"' ;;
+              42) echo '"1.21.2"' ;;
+              46) echo '"1.21.4"' ;;
+              48) echo '"1.21.4"' ;;
+              55) echo '"1.21.5"' ;;
+              63) echo '"1.21.6"' ;;
+              64) echo '"1.21.7"' ;;
+              69) echo '"1.21.9"' ;;
+              75) echo '"1.21.11"' ;;
+              80) echo '"1.21.6"' ;;
+              81) echo '"1.21.7"' ;;
+              88|"88.0") echo '"1.21.9"' ;;
+              *)
+                # Unknown pack_format: fall back to input game_versions
+                return 1
+                ;;
+            esac
+            return 0
+          }
+
+          if [ -n "$RESOURCEPACK_PATH" ] && [ -f "$RESOURCEPACK_PATH/pack.mcmeta" ]; then
+            # Prefer min_format/max_format if present (newer pack.mcmeta schema)
+            MINF="$(jq -r '.pack.min_format // empty' "$RESOURCEPACK_PATH/pack.mcmeta" 2>/dev/null || true)"
+            MAXF="$(jq -r '.pack.max_format // empty' "$RESOURCEPACK_PATH/pack.mcmeta" 2>/dev/null || true)"
+            PACKF="$(jq -r '.pack.pack_format // empty' "$RESOURCEPACK_PATH/pack.mcmeta" 2>/dev/null || true)"
+
+            if [ -n "$MINF" ] && [ -n "$MAXF" ]; then
+              # Map both bounds to representative versions if possible; if mapping fails, skip
+              if map_pack_format_to_version "$MINF" >/dev/null 2>&1 && map_pack_format_to_version "$MAXF" >/dev/null 2>&1; then
+                MIN_V="$(map_pack_format_to_version "$MINF")"
+                MAX_V="$(map_pack_format_to_version "$MAXF")"
+                # build JSON array from both (unique)
+                GAME_JSON="$(jq -c -n --arg a "$MIN_V" --arg b "$MAX_V" '[($a|fromjson),($b|fromjson)] | unique')"
+              fi
+            elif [ -n "$PACKF" ]; then
+              if map_pack_format_to_version "$PACKF" >/dev/null 2>&1; then
+                V="$(map_pack_format_to_version "$PACKF")"
+                GAME_JSON="$(jq -c -n --arg v "$V" '[($v|fromjson)]')"
+              fi
+            fi
+          fi
+
+          if [ -z "$GAME_JSON" ]; then
+            GAME_JSON="$(printf '%s' "$GAME_VERSIONS_RAW" | jq -R -s 'split(",") | map(.|gsub("^\\s+|\\s+$";"")) | map(select(length>0))')"
+          fi
+
           # Resource packs always use the Minecraft loader
           LOADERS_JSON='["minecraft"]'
 
-          REPO_NAME="${GITHUB_REPOSITORY##*/}"
+          # Modrinth version_number should match the GitHub release tag exactly
+          VERSION_NUMBER_FOR_MODRINTH="$RELEASE_TAG"
+
           DATA_JSON="$(jq -c -n \
             --arg project_id "${PROJECT_ID}" \
-            --arg name "${REPO_NAME} ${VERSION}" \
-            --arg version_number "${VERSION}" \
-            --arg changelog "${CHANGELOG}" \
+            --arg name "$MODRINTH_NAME" \
+            --arg version_number "$VERSION_NUMBER_FOR_MODRINTH" \
+            --arg changelog "$MODRINTH_CHANGELOG" \
             --argjson game_versions "${GAME_JSON}" \
             --argjson loaders "${LOADERS_JSON}" \
             --arg version_type "${VERSION_TYPE}" \
