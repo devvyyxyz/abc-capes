@@ -38,6 +38,10 @@ on:
         description: 'If true, build and validate payload but do not upload to Modrinth'
         required: false
         default: 'false'
+      release_name:
+        description: 'Optional explicit release name (also used as Modrinth version name)'
+        required: false
+        default: ''
 
 jobs:
   publish:
@@ -80,6 +84,7 @@ jobs:
           VERSION_TYPE_INPUT="${{ github.event.inputs.version_type || 'release' }}"
           CREATE_GH_RELEASE="${{ github.event.inputs.create_github_release || 'false' }}"
           DRY_RUN="${{ github.event.inputs.dry_run || 'false' }}"
+          RELEASE_NAME_INPUT="${{ github.event.inputs.release_name || '' }}"
           echo "resourcepack_input=$RESOURCEPACK_INPUT" >> $GITHUB_OUTPUT
           echo "version_input=$VERSION_INPUT" >> $GITHUB_OUTPUT
           echo "game_versions=$GAME_VERSIONS" >> $GITHUB_OUTPUT
@@ -87,6 +92,7 @@ jobs:
           echo "version_type=$VERSION_TYPE_INPUT" >> $GITHUB_OUTPUT
           echo "create_github_release=$CREATE_GH_RELEASE" >> $GITHUB_OUTPUT
           echo "dry_run=$DRY_RUN" >> $GITHUB_OUTPUT
+          echo "release_name_input=$RELEASE_NAME_INPUT" >> $GITHUB_OUTPUT
 
       - name: Auto-detect resourcepack path (if needed)
         id: detect
@@ -300,7 +306,16 @@ jobs:
             if [ "${{ steps.inputs.outputs.version_type }}" != "release" ]; then
               PRERELEASE="true"
             fi
-            CREATE_JSON="$(jq -c -n --arg tag_name "$TAG" --arg name "${{ steps.version.outputs.version }}" --arg body "$BODY" --argjson prerelease "$PRERELEASE" '{ tag_name: $tag_name, name: $name, body: $body, draft: false, prerelease: ($prerelease == "true") }')"
+            # Compute release name to match the Modrinth version name logic.
+            # Prefer explicit `release_name` input, else use repo + tag as a fallback.
+            REPO_NAME="${GITHUB_REPOSITORY##*/}"
+            if [ -n "${{ steps.inputs.outputs.release_name_input }}" ]; then
+              RELEASE_NAME_TO_USE="${{ steps.inputs.outputs.release_name_input }}"
+            else
+              RELEASE_NAME_TO_USE="${REPO_NAME} ${TAG}"
+            fi
+
+            CREATE_JSON="$(jq -c -n --arg tag_name "$TAG" --arg name "$RELEASE_NAME_TO_USE" --arg body "$BODY" --argjson prerelease "$PRERELEASE" '{ tag_name: $tag_name, name: $name, body: $body, draft: false, prerelease: ($prerelease == "true") }')"
             echo "CREATE_JSON: $CREATE_JSON" >&2
             RESP="$(curl -sS -X POST -H "Authorization: token ${GITHUB_TOKEN}" -H "Content-Type: application/json" -d "$CREATE_JSON" "https://api.github.com/repos/${OWNER_REPO}/releases")"
             UPLOAD_URL_RAW="$(printf '%s' "$RESP" | jq -r '.upload_url // empty')"
