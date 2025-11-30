@@ -42,10 +42,7 @@ on:
         description: 'If true, build and validate payload but do not upload to Modrinth'
         required: false
         default: 'false'
-      release_name:
-        description: 'Optional explicit release name (also used as Modrinth version name)'
-        required: false
-        default: ''
+      # release_name is declared above; do not duplicate keys
 
 jobs:
   publish:
@@ -83,7 +80,7 @@ jobs:
           set -euo pipefail
           RESOURCEPACK_INPUT="${{ github.event.inputs.resourcepack_path || '' }}"
           VERSION_INPUT="${{ github.event.inputs.version || '' }}"
-          GAME_VERSIONS="${{ github.event.inputs.game_versions || '1.20.1' }}"
+          GAME_VERSIONS="${{ github.event.inputs.game_versions || '1.21.4' }}"
           CHANGELOG_OVERRIDE="${{ github.event.inputs.changelog || '' }}"
           VERSION_TYPE_INPUT="${{ github.event.inputs.version_type || 'release' }}"
           CREATE_GH_RELEASE="${{ github.event.inputs.create_github_release || 'false' }}"
