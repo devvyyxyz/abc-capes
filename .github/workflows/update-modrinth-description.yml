@@ -1,0 +1,94 @@
+name: Update Modrinth Project Description
+
+# Updates the Modrinth project description from the repository README.md
+# Triggers manually or on push to main (you can adjust branches as needed)
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - main
+
+jobs:
+  update_description:
+    name: Update Modrinth description
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      MODRINTH_API_TOKEN: ${{ secrets.MODRINTH_API_TOKEN }}
+      MODRINTH_PROJECT_ID: ${{ secrets.MODRINTH_PROJECT_ID }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Ensure required tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo apt-get install -y jq curl
+
+      - name: Validate README exists
+        run: |
+          if [ ! -f README.md ]; then
+            echo "README.md not found in repository root. Exiting."
+            exit 1
+          fi
+
+      - name: Build JSON payload from README
+        id: build
+        run: |
+          set -euo pipefail
+          # Read README.md into a JSON string safely using jq
+          README_CONTENT=$(jq -Rs '.' README.md)
+          # Create object with description field
+          DATA_JSON=$(jq -n --argdesc "$(jq -Rs '.' README.md)" '{ description: ($argdesc|fromjson) }' --argjson argdesc "$(jq -Rs '.' README.md)") || true
+          # Fallback safe method if above is problematic
+          if [ -z "$DATA_JSON" ] || [ "$DATA_JSON" = "null" ]; then
+            DESC_RAW="$(cat README.md)"
+            DATA_JSON=$(jq -n --arg d "$DESC_RAW" '{ description: $d }')
+          fi
+          echo "$DATA_JSON" > /tmp/modrinth_payload.json
+          echo "payload_path=/tmp/modrinth_payload.json" >> $GITHUB_OUTPUT
+
+      - name: Update Modrinth project description
+        id: update
+        run: |
+          set -euo pipefail
+
+          PROJECT_ID="${MODRINTH_PROJECT_ID}"
+          TOKEN="${MODRINTH_API_TOKEN}"
+          # normalize token prefix
+          if [[ "$TOKEN" != mrp_* ]]; then
+            TOKEN="mrp_${TOKEN}"
+          fi
+
+          PAYLOAD_PATH="${{ steps.build.outputs.payload_path }}"
+          if [ ! -f "$PAYLOAD_PATH" ]; then
+            echo "Payload not found: $PAYLOAD_PATH"
+            exit 1
+          fi
+
+          API_URL="https://api.modrinth.com/v2/project/${PROJECT_ID}"
+
+          echo "Updating Modrinth project ${PROJECT_ID} description..."
+          RESPONSE=$(curl -sS -X PATCH -H "Authorization: ${TOKEN}" -H "Content-Type: application/json" --data-binary "@$PAYLOAD_PATH" "$API_URL" || true)
+
+          if [ -z "$RESPONSE" ]; then
+            echo "Empty response from Modrinth API."
+            exit 1
+          fi
+
+          # If the response contains an error key or has a non-2xx shape, surface it
+          if echo "$RESPONSE" | jq -e 'has("error")' >/dev/null 2>&1; then
+            echo "Modrinth API returned an error:" >&2
+            echo "$RESPONSE" | jq -r '.description // .error // tostring' >&2 || true
+            exit 1
+          fi
+
+          echo "Response: $RESPONSE"
+          echo "updated_response=$RESPONSE" >> $GITHUB_OUTPUT
+
+      - name: Success
+        if: success()
+        run: |
+          echo "Modrinth project description updated successfully."
