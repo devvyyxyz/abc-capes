@@ -1,5 +1,6 @@
 {
     "github-actions.workflows.pinned.workflows": [
-        ".github/workflows/update-modrinth-description.yml"
+        ".github/workflows/update-modrinth-description.yml",
+        ".github/workflows/publish-modrinth-resource-pack.yml"
     ]
 }

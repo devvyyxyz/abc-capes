@@ -1,6 +1,23 @@
 name: Publish resource pack to Modrinth
 
-# Triggers: tag pushes (v*), release published, or manual dispatch (with inputs)
+# HELP: Workflow dispatch options
+# - This workflow can run on tag pushes (v*), on GitHub release published events,
+#   or manually via workflow_dispatch. When run manually you can override values
+#   below. Several inputs are shared between GitHub and Modrinth so provide them
+#   once when running manually:
+#   - `version` -> used as Git tag (prefixed with `v` when necessary) and
+#       Modrinth `version_number`.
+#   - `release_name` and `changelog` -> used as both GitHub release title/body
+#       and Modrinth version `name`/`changelog` unless explicit overrides are set.
+#   - `modrinth_project_id` -> optional override for the project id (otherwise
+#       the `MODRINTH_PROJECT_ID` secret is used).
+#
+# Dispatch guidance:
+# - For consistent names between GitHub and Modrinth, push a tag (vX.Y.Z) or
+#   provide `create_github_release=true` when dispatching and set `release_name`.
+# - `game_versions` will be auto-detected from `pack.mcmeta` when present;
+#   otherwise it defaults sensibly.
+
 on:
   push:
     tags:
@@ -9,40 +26,59 @@ on:
     types: [published]
   workflow_dispatch:
     inputs:
+      # Files & targets
       resourcepack_path:
         description: 'Path to the resource-pack directory (relative to repo root). If blank the workflow will try to auto-detect.'
         required: false
         default: ''
+      modrinth_project_id:
+        description: 'Optional Modrinth project id override. If blank the workflow will use the secret MODRINTH_PROJECT_ID.'
+        required: false
+        default: ''
+
+      # Versioning (shared between GitHub and Modrinth)
       version:
         description: 'Optional explicit version string. This will be used as the Git tag (prefixed with v when necessary) and as the Modrinth version_number. If blank the workflow will prefer the pushed tag, release tag, or commit SHA.'
         required: false
         default: ''
-      game_versions:
-        description: 'Comma-separated game versions for Modrinth (e.g. 1.21.4,1.20.1). If pack.mcmeta is present the workflow will try to auto-detect and override this value. Defaults to a sensible value.'
-        required: false
-        default: '1.21.4'
-      # loaders removed: resource packs always use the Minecraft loader
-      changelog:
-        description: 'Optional override changelog text (markdown). This will be used as both the GitHub release body and the Modrinth changelog/description. If empty, the workflow will prefer the GitHub release body, CHANGELOG.md, or pack.mcmeta description.'
-        required: false
-        default: ''
-      version_type:
-        description: 'release | beta | alpha'
-        required: false
-        default: 'release'
-      create_github_release:
-        description: 'If true, create a GitHub release when publishing. Note: when a tag is pushed the workflow will always create or attach to a GitHub release to guarantee consistent names between GitHub and Modrinth.'
-        required: false
-        default: 'false'
       release_name:
         description: 'Optional explicit release name/title. This will be used as both the GitHub release title and the Modrinth version name when provided. If empty the workflow will prefer an existing release title or fall back to "<repo> <tag>".'
         required: false
         default: ''
+      create_github_release:
+        description: 'If true, create a GitHub release when publishing. When a tag is pushed the workflow will create or attach to a GitHub release to guarantee consistent names between GitHub and Modrinth.'
+        required: false
+        default: 'false'
+
+      # Release metadata (shared)
+      version_type:
+        description: 'release | beta | alpha'
+        required: false
+        default: 'release'
+      featured:
+        description: 'If true, mark the Modrinth version as featured.'
+        required: false
+        default: 'false'
+      changelog:
+        description: 'Optional override changelog text (markdown). This will be used as both the GitHub release body and the Modrinth changelog/description. If empty, the workflow will prefer the GitHub release body, CHANGELOG.md, or pack.mcmeta description.'
+        required: false
+        default: ''
+      changelog_type:
+        description: 'Changelog type sent to Modrinth: markdown or text. Defaults to markdown.'
+        required: false
+        default: 'markdown'
+
+      # Modrinth / compatibility
+      game_versions:
+        description: 'Comma-separated game versions for Modrinth (e.g. 1.21.4,1.20.1). If pack.mcmeta is present the workflow will try to auto-detect and override this value.'
+        required: false
+        default: '1.21.4'
+
+      # Run mode
       dry_run:
         description: 'If true, build and validate payload but do not upload to Modrinth'
         required: false
         default: 'false'
-      # release_name is declared above; do not duplicate keys
 
 jobs:
   publish:
@@ -86,6 +122,9 @@ jobs:
           CREATE_GH_RELEASE="${{ github.event.inputs.create_github_release || 'false' }}"
           DRY_RUN="${{ github.event.inputs.dry_run || 'false' }}"
           RELEASE_NAME_INPUT="${{ github.event.inputs.release_name || '' }}"
+          MODRINTH_PROJECT_ID_INPUT="${{ github.event.inputs.modrinth_project_id || '' }}"
+          FEATURED_INPUT="${{ github.event.inputs.featured || 'false' }}"
+          CHANGELOG_TYPE_INPUT="${{ github.event.inputs.changelog_type || 'markdown' }}"
           echo "resourcepack_input=$RESOURCEPACK_INPUT" >> $GITHUB_OUTPUT
           echo "version_input=$VERSION_INPUT" >> $GITHUB_OUTPUT
           echo "game_versions=$GAME_VERSIONS" >> $GITHUB_OUTPUT
@@ -94,6 +133,9 @@ jobs:
           echo "create_github_release=$CREATE_GH_RELEASE" >> $GITHUB_OUTPUT
           echo "dry_run=$DRY_RUN" >> $GITHUB_OUTPUT
           echo "release_name_input=$RELEASE_NAME_INPUT" >> $GITHUB_OUTPUT
+          echo "modrinth_project_id_input=$MODRINTH_PROJECT_ID_INPUT" >> $GITHUB_OUTPUT
+          echo "featured_input=$FEATURED_INPUT" >> $GITHUB_OUTPUT
+          echo "changelog_type_input=$CHANGELOG_TYPE_INPUT" >> $GITHUB_OUTPUT
 
       - name: Auto-detect resourcepack path (if needed)
         id: detect
@@ -364,7 +406,12 @@ jobs:
           set -euo pipefail
 
           API_URL="https://api.modrinth.com/v2/version"
-          PROJECT_ID="${MODRINTH_PROJECT_ID}"
+          # Allow override of the Modrinth project id via workflow input
+          if [ -n "${{ steps.inputs.outputs.modrinth_project_id_input || '' }}" ]; then
+            PROJECT_ID="${{ steps.inputs.outputs.modrinth_project_id_input }}"
+          else
+            PROJECT_ID="${MODRINTH_PROJECT_ID}"
+          fi
           ZIP_NAME="${{ steps.package.outputs.zip }}"
           ZIP_PATH="$GITHUB_WORKSPACE/$ZIP_NAME"
           VERSION="${{ steps.version.outputs.version }}"
@@ -373,6 +420,8 @@ jobs:
           VERSION_TYPE="${{ steps.inputs.outputs.version_type }}"
           CREATE_GH_RELEASE="${{ steps.inputs.outputs.create_github_release }}"
           DRY_RUN="${{ steps.inputs.outputs.dry_run }}"
+          FEATURED_RAW="${{ steps.inputs.outputs.featured_input || 'false' }}"
+          CHANGELOG_TYPE_RAW="${{ steps.inputs.outputs.changelog_type_input || 'markdown' }}"
 
           if [ ! -f "$ZIP_PATH" ]; then
             echo "ERROR: zip file not found at $ZIP_PATH"
@@ -594,19 +643,21 @@ jobs:
             --argjson game_versions "${GAME_JSON}" \
             --argjson loaders "${LOADERS_JSON}" \
             --arg version_type "${VERSION_TYPE}" \
-            '{
+              --arg changelog_type "${CHANGELOG_TYPE_RAW}" \
+              --argjson featured ${FEATURED_RAW} \
+              '{
               project_id: $project_id,
               name: $name,
               version_number: $version_number,
               changelog: $changelog,
-              changelog_type: "markdown",
+                changelog_type: $changelog_type,
               game_versions: $game_versions,
               loaders: $loaders,
               dependencies: [],
               file_parts: ["file"],
               primary_file: "file",
-              version_type: $version_type,
-              featured: false
+                version_type: $version_type,
+                featured: $featured
             }')"
 
           echo "DATA_JSON: $DATA_JSON" >&2
