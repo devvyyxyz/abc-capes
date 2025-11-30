@@ -14,16 +14,16 @@ on:
         required: false
         default: ''
       version:
-        description: 'Optional explicit version string to use instead of tag/commit'
+        description: 'Optional explicit version string. This will be used as the Git tag (prefixed with v when necessary) and as the Modrinth version_number. If blank the workflow will prefer the pushed tag, release tag, or commit SHA.'
         required: false
         default: ''
       game_versions:
-        description: 'Comma-separated game versions (e.g. 1.20.1,1.19.4)'
+        description: 'Comma-separated game versions for Modrinth (e.g. 1.21.4,1.20.1). If pack.mcmeta is present the workflow will try to auto-detect and override this value. Defaults to a sensible value.'
         required: false
-        default: '1.20.1'
+        default: '1.21.4'
       # loaders removed: resource packs always use the Minecraft loader
       changelog:
-        description: 'Optional override changelog text (markdown). If empty, the workflow will prefer the GitHub release body when available.'
+        description: 'Optional override changelog text (markdown). This will be used as both the GitHub release body and the Modrinth changelog/description. If empty, the workflow will prefer the GitHub release body, CHANGELOG.md, or pack.mcmeta description.'
         required: false
         default: ''
       version_type:
@@ -31,9 +31,13 @@ on:
         required: false
         default: 'release'
       create_github_release:
-        description: 'If true, create a GitHub release when publishing (default: false). Guarded to avoid duplicate releases.'
+        description: 'If true, create a GitHub release when publishing. Note: when a tag is pushed the workflow will always create or attach to a GitHub release to guarantee consistent names between GitHub and Modrinth.'
         required: false
         default: 'false'
+      release_name:
+        description: 'Optional explicit release name/title. This will be used as both the GitHub release title and the Modrinth version name when provided. If empty the workflow will prefer an existing release title or fall back to "<repo> <tag>".'
+        required: false
+        default: ''
       dry_run:
         description: 'If true, build and validate payload but do not upload to Modrinth'
         required: false
@@ -248,7 +252,8 @@ jobs:
           fi
 
       - name: Create GitHub release and attach zip (if requested)
-        if: ${{ steps.inputs.outputs.create_github_release == 'true' && github.event_name != 'release' }}
+        id: create_release
+        if: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || (steps.inputs.outputs.create_github_release == 'true' && github.event_name != 'release') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -300,6 +305,15 @@ jobs:
             RELEASE_JSON="$(curl -sS -H "Authorization: token ${GITHUB_TOKEN}" "https://api.github.com/repos/${OWNER_REPO}/releases/tags/${TAG}")"
             UPLOAD_URL_RAW="$(printf '%s' "$RELEASE_JSON" | jq -r '.upload_url // empty')"
             UPLOAD_URL="$(printf '%s' "$UPLOAD_URL_RAW" | sed -e 's/{.*}//')"
+            # Extract canonical name/tag from existing release
+            EXIST_NAME="$(printf '%s' "$RELEASE_JSON" | jq -r '.name // empty' || true)"
+            EXIST_TAG="$(printf '%s' "$RELEASE_JSON" | jq -r '.tag_name // empty' || true)"
+            if [ -n "$EXIST_TAG" ]; then
+              echo "release_tag=$EXIST_TAG" >> $GITHUB_OUTPUT
+            fi
+            if [ -n "$EXIST_NAME" ]; then
+              echo "release_name=$EXIST_NAME" >> $GITHUB_OUTPUT
+            fi
           else
             echo "Creating new GitHub release for tag ${TAG}"
             PRERELEASE="false"
@@ -320,6 +334,19 @@ jobs:
             RESP="$(curl -sS -X POST -H "Authorization: token ${GITHUB_TOKEN}" -H "Content-Type: application/json" -d "$CREATE_JSON" "https://api.github.com/repos/${OWNER_REPO}/releases")"
             UPLOAD_URL_RAW="$(printf '%s' "$RESP" | jq -r '.upload_url // empty')"
             UPLOAD_URL="$(printf '%s' "$UPLOAD_URL_RAW" | sed -e 's/{.*}//')"
+            # Output created release info for downstream steps
+            NEW_TAG="$(printf '%s' "$RESP" | jq -r '.tag_name // empty' || true)"
+            NEW_NAME="$(printf '%s' "$RESP" | jq -r '.name // empty' || true)"
+            if [ -n "$NEW_TAG" ]; then
+              echo "release_tag=$NEW_TAG" >> $GITHUB_OUTPUT
+            else
+              echo "release_tag=$TAG" >> $GITHUB_OUTPUT
+            fi
+            if [ -n "$NEW_NAME" ]; then
+              echo "release_name=$NEW_NAME" >> $GITHUB_OUTPUT
+            else
+              echo "release_name=$RELEASE_NAME_TO_USE" >> $GITHUB_OUTPUT
+            fi
           fi
 
           if [ -z "$UPLOAD_URL" ]; then
@@ -415,22 +442,33 @@ jobs:
 
           # Build JSON arrays robustly and output compact JSON (-c).
           # Determine release/tag/title/body for Modrinth fields.
-          # Prefer explicit GitHub release payload when available, else fall back to tag ref or previously-determined version.
+          # Prefer explicit GitHub release payload when available, then prefer the release created by this workflow (if any),
+          # then fallback to tag ref or previously-determined version.
           RELEASE_TAG=""
           RELEASE_TITLE=""
           RELEASE_BODY=""
 
+          # If workflow run was triggered by a release event, use the event payload
           if [ "${GITHUB_EVENT_NAME:-}" = "release" ] && [ -f "${GITHUB_EVENT_PATH:-}" ]; then
             RELEASE_TAG="$(jq -r '.release.tag_name // empty' "$GITHUB_EVENT_PATH" 2>/dev/null || true)"
             RELEASE_TITLE="$(jq -r '.release.name // empty' "$GITHUB_EVENT_PATH" 2>/dev/null || true)"
             RELEASE_BODY="$(jq -r '.release.body // empty' "$GITHUB_EVENT_PATH" 2>/dev/null || true)"
           fi
 
+          # If we created or found a release earlier in the job, prefer its outputs
+          if [ -n "${{ steps.create_release.outputs.release_tag || '' }}" ]; then
+            RELEASE_TAG="${{ steps.create_release.outputs.release_tag }}"
+          fi
+          if [ -n "${{ steps.create_release.outputs.release_name || '' }}" ]; then
+            RELEASE_TITLE="${{ steps.create_release.outputs.release_name }}"
+          fi
+
+          # If still empty, use the tag ref when present
           if [ -z "$RELEASE_TAG" ] && [[ "${GITHUB_REF:-}" == refs/tags/* ]]; then
             RELEASE_TAG="${GITHUB_REF#refs/tags/}"
           fi
 
-          # As a final fallback, use the earlier-determined version
+          # As a final fallback, use the earlier-determined VERSION
           if [ -z "$RELEASE_TAG" ]; then
             RELEASE_TAG="$VERSION"
           fi
