@@ -47,7 +47,7 @@ jobs:
     name: Build and publish datapack to Modrinth
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
     env:
       MODRINTH_API_TOKEN: ${{ secrets.MODRINTH_API_TOKEN }}
       MODRINTH_PROJECT_ID: ${{ secrets.MODRINTH_PROJECT_ID }}
@@ -147,11 +147,18 @@ jobs:
             exit 0
           fi
 
+          # Prefer tag when available; fallback to release name when triggered by a release
           if [ "${GITHUB_EVENT_NAME:-}" = "release" ] && [ -f "$GITHUB_EVENT_PATH" ]; then
             TAG="$(jq -r '.release.tag_name // empty' "$GITHUB_EVENT_PATH")"
+            RELEASE_NAME="$(jq -r '.release.name // empty' "$GITHUB_EVENT_PATH")"
             if [ -n "$TAG" ]; then
               VERSION="${TAG#v}"
               echo "Detected release event with tag: $TAG -> version $VERSION"
+              echo "version=$VERSION" >> $GITHUB_OUTPUT
+              exit 0
+            elif [ -n "$RELEASE_NAME" ]; then
+              VERSION="$RELEASE_NAME"
+              echo "Detected release event with name: $RELEASE_NAME -> version $VERSION"
               echo "version=$VERSION" >> $GITHUB_OUTPUT
               exit 0
             fi
@@ -166,26 +173,38 @@ jobs:
           fi
 
           VERSION="$(git rev-parse --short HEAD)"
-          echo "No tag found; falling back to commit SHA: $VERSION"
+          echo "No tag or release name found; falling back to commit SHA: $VERSION"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-      - name: Create zip of datapack
+      - name: Create zip of resource pack
         id: package
         run: |
           set -euo pipefail
           DATAPACK_PATH="${{ steps.detect.outputs.datapack_path }}"
-          echo "Datapack path to package: $DATAPACK_PATH"
-          if [ -z "$DATAPACK_PATH" ] || [ ! -d "$DATAPACK_PATH" ]; then
-            echo "ERROR: datapack path '$DATAPACK_PATH' does not exist."
+          echo "Detected resource-pack path: $DATAPACK_PATH"
+          if [ -z "$DATAPACK_PATH" ]; then
+            echo "ERROR: datapack path is empty."
             exit 1
           fi
 
           REPO_SAFE="${GITHUB_REPOSITORY//\//-}"
           VERSION="${{ steps.version.outputs.version }}"
-          ZIP_NAME="${REPO_SAFE}-datapack-${VERSION}.zip"
+
+          # Sanitize VERSION for filenames (replace spaces and unsafe chars with '-')
+          FILENAME_VERSION="$(printf '%s' "$VERSION" | tr ' ' '-' | sed 's/[^A-Za-z0-9._-]/-/g')"
+          ZIP_NAME="${REPO_SAFE}-resourcepack-${FILENAME_VERSION}.zip"
 
           rm -f "$GITHUB_WORKSPACE/$ZIP_NAME"
-          (cd "$DATAPACK_PATH" && zip -r "$GITHUB_WORKSPACE/$ZIP_NAME" . -x "*.git*" ) || { echo "zip failed"; exit 1; }
+
+          # If the detected path is root (.), package only the resource-pack files (pack.mcmeta + assets/)
+          if [ "$DATAPACK_PATH" = "." ] || [ "$DATAPACK_PATH" = "$GITHUB_WORKSPACE" ] || [ "$DATAPACK_PATH" = "$(basename "$GITHUB_WORKSPACE")" ]; then
+            echo "Packaging pack.mcmeta and assets/ from repository root as resource pack"
+            (cd "$GITHUB_WORKSPACE" && zip -r "$GITHUB_WORKSPACE/$ZIP_NAME" pack.mcmeta assets -x "*.git*" ) || { echo "zip failed"; exit 1; }
+          else
+            echo "Packaging entire detected path: $DATAPACK_PATH"
+            (cd "$DATAPACK_PATH" && zip -r "$GITHUB_WORKSPACE/$ZIP_NAME" . -x "*.git*" ) || { echo "zip failed"; exit 1; }
+          fi
+
           echo "zip=$ZIP_NAME" >> $GITHUB_OUTPUT
 
       - name: Upload zip as artifact (for auditing/debug)
@@ -193,6 +212,124 @@ jobs:
         with:
           name: datapack-zip
           path: ${{ github.workspace }}/${{ steps.package.outputs.zip }}
+
+      - name: Compute SHA256 of generated zip
+        id: compute_sha
+        run: |
+          set -euo pipefail
+          ZIP_NAME="${{ steps.package.outputs.zip }}"
+          ZIP_PATH="$GITHUB_WORKSPACE/$ZIP_NAME"
+          if [ ! -f "$ZIP_PATH" ]; then
+            echo "Zip file not found: $ZIP_PATH"
+            exit 1
+          fi
+          if command -v sha256sum >/dev/null 2>&1; then
+            SHA256_VAL="$(sha256sum "$ZIP_PATH" | awk '{print $1}')"
+          else
+            SHA256_VAL="$(openssl dgst -sha256 "$ZIP_PATH" | awk '{print $2}')"
+          fi
+          echo "sha256=$SHA256_VAL" >> $GITHUB_OUTPUT
+
+      - name: Attach zip to GitHub release (when release published)
+        if: ${{ github.event_name == 'release' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ZIP_NAME="${{ steps.package.outputs.zip }}"
+          ZIP_PATH="$GITHUB_WORKSPACE/$ZIP_NAME"
+          if [ ! -f "$ZIP_PATH" ]; then
+            echo "Zip file not found: $ZIP_PATH"
+            exit 1
+          fi
+
+          if [ -f "$GITHUB_EVENT_PATH" ]; then
+            UPLOAD_URL_RAW="$(jq -r '.release.upload_url // empty' "$GITHUB_EVENT_PATH")"
+            if [ -z "$UPLOAD_URL_RAW" ]; then
+              echo "Could not read release.upload_url from event payload; skipping release asset upload."
+              exit 0
+            fi
+            # Trim the templated part: e.g. https://uploads.github.com/...{?name,label}
+            UPLOAD_URL="$(printf '%s' "$UPLOAD_URL_RAW" | sed -e 's/{.*}//')"
+            echo "Uploading $ZIP_NAME to GitHub release via $UPLOAD_URL"
+            curl -sS -X POST -H "Authorization: token ${GITHUB_TOKEN}" -H "Content-Type: application/zip" --data-binary "@$ZIP_PATH" "$UPLOAD_URL?name=$(basename "$ZIP_PATH")" || { echo "upload failed"; exit 1; }
+          else
+            echo "No GITHUB_EVENT_PATH; not a release event; skipping upload to release."
+          fi
+
+      - name: Create GitHub release and attach zip (if requested)
+        if: ${{ steps.inputs.outputs.create_github_release == 'true' && github.event_name != 'release' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ZIP_NAME="${{ steps.package.outputs.zip }}"
+          ZIP_PATH="$GITHUB_WORKSPACE/$ZIP_NAME"
+          if [ ! -f "$ZIP_PATH" ]; then
+            echo "Zip file not found: $ZIP_PATH"
+            exit 1
+          fi
+
+          # Build changelog/body for the release (prefer explicit input override, then CHANGELOG.md, then pack.mcmeta description)
+          BODY=""
+          if [ -n "${{ steps.inputs.outputs.changelog_override }}" ]; then
+            BODY="${{ steps.inputs.outputs.changelog_override }}"
+          elif [ -f CHANGELOG.md ]; then
+            BODY="$(cat CHANGELOG.md)"
+          elif [ -f "${{ steps.detect.outputs.datapack_path }}/pack.mcmeta" ]; then
+            DESC="$(jq -r '.pack.description // empty' "${{ steps.detect.outputs.datapack_path }}/pack.mcmeta" 2>/dev/null || true)"
+            if [ -n "$DESC" ]; then
+              BODY="$DESC"
+            fi
+          fi
+          if [ -z "$BODY" ]; then
+            BODY="Automated release for version ${{ steps.version.outputs.version }}"
+          fi
+          # append computed checksum if available
+          if [ -n "${{ steps.compute_sha.outputs.sha256 }}" ]; then
+            BODY="$BODY\n\n**SHA256:** ${{ steps.compute_sha.outputs.sha256 }}"
+          fi
+
+          # Determine tag to use for the release
+          TAG=""
+          if [[ "${GITHUB_REF:-}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            # Use version with a 'v' prefix when creating a tag
+            RAW_VER="${{ steps.version.outputs.version }}"
+            # sanitize tag (no spaces)
+            TAG="v$(printf '%s' "$RAW_VER" | tr ' ' '-')"
+          fi
+
+          OWNER_REPO="${GITHUB_REPOSITORY}"
+
+          # Check whether a release for this tag already exists
+          HTTP="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: token ${GITHUB_TOKEN}" "https://api.github.com/repos/${OWNER_REPO}/releases/tags/${TAG}" || true)"
+          if [ "$HTTP" = "200" ]; then
+            echo "Release for tag ${TAG} already exists. Retrieving upload_url..."
+            RELEASE_JSON="$(curl -sS -H "Authorization: token ${GITHUB_TOKEN}" "https://api.github.com/repos/${OWNER_REPO}/releases/tags/${TAG}")"
+            UPLOAD_URL_RAW="$(printf '%s' "$RELEASE_JSON" | jq -r '.upload_url // empty')"
+            UPLOAD_URL="$(printf '%s' "$UPLOAD_URL_RAW" | sed -e 's/{.*}//')"
+          else
+            echo "Creating new GitHub release for tag ${TAG}"
+            PRERELEASE="false"
+            if [ "${{ steps.inputs.outputs.version_type }}" != "release" ]; then
+              PRERELEASE="true"
+            fi
+            CREATE_JSON="$(jq -c -n --arg tag_name "$TAG" --arg name "${{ steps.version.outputs.version }}" --arg body "$BODY" --argjson prerelease "$PRERELEASE" '{ tag_name: $tag_name, name: $name, body: $body, draft: false, prerelease: ($prerelease == "true") }')"
+            echo "CREATE_JSON: $CREATE_JSON" >&2
+            RESP="$(curl -sS -X POST -H "Authorization: token ${GITHUB_TOKEN}" -H "Content-Type: application/json" -d "$CREATE_JSON" "https://api.github.com/repos/${OWNER_REPO}/releases")"
+            UPLOAD_URL_RAW="$(printf '%s' "$RESP" | jq -r '.upload_url // empty')"
+            UPLOAD_URL="$(printf '%s' "$UPLOAD_URL_RAW" | sed -e 's/{.*}//')"
+          fi
+
+          if [ -z "$UPLOAD_URL" ]; then
+            echo "Could not determine upload_url for release; skipping release asset upload."
+            exit 0
+          fi
+
+          echo "Uploading $ZIP_NAME to release via $UPLOAD_URL"
+          curl -sS -X POST -H "Authorization: token ${GITHUB_TOKEN}" -H "Content-Type: application/zip" --data-binary "@$ZIP_PATH" "$UPLOAD_URL?name=$(basename "$ZIP_PATH")" || { echo "upload failed"; exit 1; }
 
       - name: Publish to Modrinth
         id: publish_modrinth
@@ -266,6 +403,10 @@ jobs:
             if [ -z "${CHANGELOG:-}" ]; then
               CHANGELOG="Automated upload from GitHub Actions for version ${VERSION}"
             fi
+            # Append checksum if available
+            if [ -n "${{ steps.compute_sha.outputs.sha256 || '' }}" ]; then
+              CHANGELOG="$CHANGELOG\n\n**SHA256:** ${{ steps.compute_sha.outputs.sha256 }}"
+            fi
           fi
 
           # Normalize token: allow secret to be stored either with or without leading "mrp_"
@@ -318,12 +459,8 @@ jobs:
           # If there's any existing version with our version number, inspect files and compare checksums (optional).
           if echo "$EXISTING" | jq -e --arg ver "$VERSION" '.[] | select(.version_number == $ver)' >/dev/null 2>&1; then
             echo "Found existing version(s) with same version_number. Checking file checksums..."
-            # compute local checksum
-            if command -v sha256sum >/dev/null 2>&1; then
-              LOCAL_SHA256="$(sha256sum "$ZIP_PATH" | awk '{print $1}')"
-            else
-              LOCAL_SHA256="$(openssl dgst -sha256 "$ZIP_PATH" | awk '{print $2}')"
-            fi
+            # use precomputed checksum from earlier step
+            LOCAL_SHA256="${{ steps.compute_sha.outputs.sha256 }}"
 
             MATCH=""
             # iterate matching versions, fetch full version detail to inspect files/hashes
