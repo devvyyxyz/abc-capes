@@ -3,7 +3,12 @@ name: Update Modrinth Project Description
 # Updates the Modrinth project description from the repository README.md
 # Triggers manually or on push to main (you can adjust branches as needed)
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'If true, print the payload and do not send to Modrinth'
+        required: false
+        default: 'false'
   push:
     branches:
       - main
@@ -57,9 +62,41 @@ jobs:
 
           PROJECT_ID="${MODRINTH_PROJECT_ID}"
           TOKEN="${MODRINTH_API_TOKEN}"
+          # read dry_run input (defaults to 'false' when not present)
+          DRY_RUN="${{ github.event.inputs.dry_run || 'false' }}"
           # normalize token prefix
           if [[ "$TOKEN" != mrp_* ]]; then
             TOKEN="mrp_${TOKEN}"
+          fi
+
+          # If the user passed a full Modrinth project URL as the project id (e.g. https://modrinth.com/project/<slug>),
+          # extract the final path segment as the slug.
+          if [[ "$PROJECT_ID" == *"modrinth.com"* ]]; then
+            # strip trailing slash and take last path segment
+            PROJECT_ID="$(printf '%s' "$PROJECT_ID" | sed -E 's|/$||' | awk -F/ '{print $NF}')"
+            echo "Normalized MODRINTH_PROJECT_ID to '$PROJECT_ID' from provided URL"
+          fi
+
+          # Validate required secrets/inputs early to give clear errors
+          if [ -z "${PROJECT_ID:-}" ]; then
+            echo "ERROR: MODRINTH_PROJECT_ID is not set or is empty."
+            echo "Please add the repository secret 'MODRINTH_PROJECT_ID' containing your project's id or slug (e.g. 'AABBCCDD' or 'my-project-slug')."
+            exit 1
+          fi
+
+          if [ -z "${MODRINTH_API_TOKEN:-}" ]; then
+            echo "ERROR: MODRINTH_API_TOKEN is not set or is empty."
+            echo "Please add the repository secret 'MODRINTH_API_TOKEN' with a personal access token that has project write permissions."
+            exit 1
+          fi
+
+          if [ "${DRY_RUN:-false}" = "true" ]; then
+            echo "Dry run enabled — will not send PATCH to Modrinth."
+            echo "Payload (first 4000 chars):"
+            head -c 4000 "$PAYLOAD_PATH" || true
+            echo
+            echo "If you want to actually update the project description, re-run the workflow with dry_run: false or set the input accordingly."
+            exit 0
           fi
 
           PAYLOAD_PATH="${{ steps.build.outputs.payload_path }}"
