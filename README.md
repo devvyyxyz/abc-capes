@@ -47,10 +47,12 @@ On the version page, simply choose your Minecraft version and then select the ca
 
 ## Staff capes
 _coming soon_
+<!--
 > ![Classic mojang cape](https://cdn.modrinth.com/data/cached_images/db505db86d8fe9aea15cf4ae77c5af6374f4419c.png)
 > ![Xbox cape](https://cdn.modrinth.com/data/cached_images/c3381545be534ae39e00280f53938d7742e063e2.png)
 > ![Mojang cape](https://cdn.modrinth.com/data/cached_images/91b583a3d8dc7fcda6fc72e0654f54ada0323ab6.png)
 > ![Mojang studios cape](https://cdn.modrinth.com/data/cached_images/540797ecf1dc5109c80e9f3fe866673bd922f09a.png)
+-->
 
 ## Physical event capes
 _coming soon_
