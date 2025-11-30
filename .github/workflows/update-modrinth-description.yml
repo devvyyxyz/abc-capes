@@ -68,25 +68,62 @@ jobs:
             exit 1
           fi
 
-          API_URL="https://api.modrinth.com/v2/project/${PROJECT_ID}"
+          echo "Attempting to update Modrinth project ${PROJECT_ID} description..."
+          # Candidate endpoints to try (tries common variants until one works)
+          CANDIDATES=(
+            "https://api.modrinth.com/v2/project/${PROJECT_ID}"
+            "https://api.modrinth.com/project/${PROJECT_ID}"
+            "https://staging-api.modrinth.com/project/${PROJECT_ID}"
+            "https://staging-api.modrinth.com/v2/project/${PROJECT_ID}"
+          )
 
-          echo "Updating Modrinth project ${PROJECT_ID} description..."
-          RESPONSE=$(curl -sS -X PATCH -H "Authorization: ${TOKEN}" -H "Content-Type: application/json" --data-binary "@$PAYLOAD_PATH" "$API_URL" || true)
+          LAST_ERR=""
+          SUCCESS=0
+          for API_URL in "${CANDIDATES[@]}"; do
+            echo "Trying $API_URL"
+            HTTP_RESPONSE=$(mktemp)
+            HTTP_CODE=$(curl -sS -w "%{http_code}" -o "$HTTP_RESPONSE" -X PATCH \
+              -H "Authorization: ${TOKEN}" \
+              -H "Content-Type: application/json" \
+              -H "User-Agent: github_actions/${GITHUB_REPOSITORY}" \
+              --data-binary "@$PAYLOAD_PATH" \
+              "$API_URL" || true)
 
-          if [ -z "$RESPONSE" ]; then
-            echo "Empty response from Modrinth API."
+            BODY_CONTENT=$(cat "$HTTP_RESPONSE" || true)
+            rm -f "$HTTP_RESPONSE"
+
+            echo "HTTP $HTTP_CODE from $API_URL"
+            if [ "$HTTP_CODE" = "204" ] || [ "$HTTP_CODE" = "200" ]; then
+              echo "Modrinth project updated (HTTP $HTTP_CODE) via $API_URL."
+              echo "updated_response={\"status\":$HTTP_CODE, \"endpoint\": \"$API_URL\"}" >> $GITHUB_OUTPUT
+              SUCCESS=1
+              break
+            fi
+
+            # record last body for diagnostics
+            LAST_ERR="$API_URL - HTTP $HTTP_CODE - $BODY_CONTENT"
+            # If it's a 404 specifically, continue to next candidate; otherwise break and show error
+            if [ "$HTTP_CODE" = "404" ]; then
+              echo "Route not found at $API_URL, trying next candidate..."
+              continue
+            else
+              echo "Non-success response from $API_URL: HTTP $HTTP_CODE"
+              if [ -n "$BODY_CONTENT" ]; then
+                if echo "$BODY_CONTENT" | jq -e 'has("error")' >/dev/null 2>&1; then
+                  echo "Modrinth API returned an error:" >&2
+                  echo "$BODY_CONTENT" | jq -r '.description // .error // tostring' >&2 || true
+                else
+                  echo "Response body: $BODY_CONTENT" >&2
+                fi
+              fi
+              exit 1
+            fi
+          done
+
+          if [ "$SUCCESS" -ne 1 ]; then
+            echo "All candidate endpoints failed. Last error: $LAST_ERR" >&2
             exit 1
           fi
-
-          # If the response contains an error key or has a non-2xx shape, surface it
-          if echo "$RESPONSE" | jq -e 'has("error")' >/dev/null 2>&1; then
-            echo "Modrinth API returned an error:" >&2
-            echo "$RESPONSE" | jq -r '.description // .error // tostring' >&2 || true
-            exit 1
-          fi
-
-          echo "Response: $RESPONSE"
-          echo "updated_response=$RESPONSE" >> $GITHUB_OUTPUT
 
       - name: Success
         if: success()
