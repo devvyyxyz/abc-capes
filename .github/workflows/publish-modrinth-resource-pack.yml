@@ -1,4 +1,4 @@
-name: Publish datapack to Modrinth
+name: Publish resource pack to Modrinth
 
 # Triggers: tag pushes (v*), release published, or manual dispatch (with inputs)
 on:
@@ -9,8 +9,8 @@ on:
     types: [published]
   workflow_dispatch:
     inputs:
-      datapack_path:
-        description: 'Path to the datapack directory (relative to repo root). If blank the workflow will try to auto-detect.'
+      resourcepack_path:
+        description: 'Path to the resource-pack directory (relative to repo root). If blank the workflow will try to auto-detect.'
         required: false
         default: ''
       version:
@@ -21,10 +21,7 @@ on:
         description: 'Comma-separated game versions (e.g. 1.20.1,1.19.4)'
         required: false
         default: '1.20.1'
-      loaders:
-        description: 'Comma-separated loaders (for datapacks use "minecraft")'
-        required: false
-        default: 'minecraft'
+      # loaders removed: resource packs always use the Minecraft loader
       changelog:
         description: 'Optional override changelog text (markdown). If empty, the workflow will prefer the GitHub release body when available.'
         required: false
@@ -44,7 +41,7 @@ on:
 
 jobs:
   publish:
-    name: Build and publish datapack to Modrinth
+    name: Build and publish resource pack to Modrinth
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -76,31 +73,29 @@ jobs:
         id: inputs
         run: |
           set -euo pipefail
-          DATAPACK_INPUT="${{ github.event.inputs.datapack_path || '' }}"
+          RESOURCEPACK_INPUT="${{ github.event.inputs.resourcepack_path || '' }}"
           VERSION_INPUT="${{ github.event.inputs.version || '' }}"
           GAME_VERSIONS="${{ github.event.inputs.game_versions || '1.20.1' }}"
-          LOADERS_RAW="${{ github.event.inputs.loaders || 'minecraft' }}"
           CHANGELOG_OVERRIDE="${{ github.event.inputs.changelog || '' }}"
           VERSION_TYPE_INPUT="${{ github.event.inputs.version_type || 'release' }}"
           CREATE_GH_RELEASE="${{ github.event.inputs.create_github_release || 'false' }}"
           DRY_RUN="${{ github.event.inputs.dry_run || 'false' }}"
-          echo "datapack_input=$DATAPACK_INPUT" >> $GITHUB_OUTPUT
+          echo "resourcepack_input=$RESOURCEPACK_INPUT" >> $GITHUB_OUTPUT
           echo "version_input=$VERSION_INPUT" >> $GITHUB_OUTPUT
           echo "game_versions=$GAME_VERSIONS" >> $GITHUB_OUTPUT
-          echo "loaders_raw=$LOADERS_RAW" >> $GITHUB_OUTPUT
           echo "changelog_override=$CHANGELOG_OVERRIDE" >> $GITHUB_OUTPUT
           echo "version_type=$VERSION_TYPE_INPUT" >> $GITHUB_OUTPUT
           echo "create_github_release=$CREATE_GH_RELEASE" >> $GITHUB_OUTPUT
           echo "dry_run=$DRY_RUN" >> $GITHUB_OUTPUT
 
-      - name: Auto-detect datapack path (if needed)
+      - name: Auto-detect resourcepack path (if needed)
         id: detect
         run: |
           set -euo pipefail
-          INPUT="${{ steps.inputs.outputs.datapack_input }}"
+          INPUT="${{ steps.inputs.outputs.resourcepack_input }}"
           if [ -n "$INPUT" ] && [ -d "$INPUT" ]; then
-            echo "Using provided datapack path: $INPUT"
-            echo "datapack_path=$INPUT" >> $GITHUB_OUTPUT
+            echo "Using provided resource-pack path: $INPUT"
+            echo "resourcepack_path=$INPUT" >> $GITHUB_OUTPUT
             exit 0
           fi
 
@@ -109,30 +104,19 @@ jobs:
             p="${pmfiles[0]}"
             dir="$(dirname "$p")"
             dir="${dir#./}"
-            echo "Auto-detected datapack path from pack.mcmeta: $dir"
-            echo "datapack_path=$dir" >> $GITHUB_OUTPUT
+            echo "Auto-detected resource-pack path from pack.mcmeta: $dir"
+            echo "resourcepack_path=$dir" >> $GITHUB_OUTPUT
             exit 0
           fi
 
           if [ "${#pmfiles[@]}" -gt 1 ]; then
             echo "Multiple pack.mcmeta files found:"
             for f in "${pmfiles[@]}"; do echo " - ${f#./}"; done
-            echo "Please provide datapack_path input to disambiguate."
+            echo "Please provide resourcepack_path input to disambiguate."
             exit 1
           fi
 
-          mapfile -d '' candidates < <(find . -type d -path '*/data' -print0 || true)
-          if [ "${#candidates[@]}" -gt 0 ]; then
-            first="${candidates[0]}"
-            root="${first%/data}"
-            root="${root#./}"
-            if [ -z "$root" ]; then root="."; fi
-            echo "Auto-detected datapack path by finding 'data' folder: $root"
-            echo "datapack_path=$root" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          echo "ERROR: could not find pack.mcmeta or a 'data' folder to auto-detect a datapack."
+          echo "ERROR: could not find pack.mcmeta to auto-detect a resource pack."
           exit 1
 
       - name: Determine version string
@@ -180,10 +164,10 @@ jobs:
         id: package
         run: |
           set -euo pipefail
-          DATAPACK_PATH="${{ steps.detect.outputs.datapack_path }}"
-          echo "Detected resource-pack path: $DATAPACK_PATH"
-          if [ -z "$DATAPACK_PATH" ]; then
-            echo "ERROR: datapack path is empty."
+          RESOURCEPACK_PATH="${{ steps.detect.outputs.resourcepack_path }}"
+          echo "Detected resource-pack path: $RESOURCEPACK_PATH"
+          if [ -z "$RESOURCEPACK_PATH" ]; then
+            echo "ERROR: resourcepack path is empty."
             exit 1
           fi
 
@@ -197,12 +181,12 @@ jobs:
           rm -f "$GITHUB_WORKSPACE/$ZIP_NAME"
 
           # If the detected path is root (.), package only the resource-pack files (pack.mcmeta + assets/)
-          if [ "$DATAPACK_PATH" = "." ] || [ "$DATAPACK_PATH" = "$GITHUB_WORKSPACE" ] || [ "$DATAPACK_PATH" = "$(basename "$GITHUB_WORKSPACE")" ]; then
+          if [ "$RESOURCEPACK_PATH" = "." ] || [ "$RESOURCEPACK_PATH" = "$GITHUB_WORKSPACE" ] || [ "$RESOURCEPACK_PATH" = "$(basename "$GITHUB_WORKSPACE")" ]; then
             echo "Packaging pack.mcmeta and assets/ from repository root as resource pack"
             (cd "$GITHUB_WORKSPACE" && zip -r "$GITHUB_WORKSPACE/$ZIP_NAME" pack.mcmeta assets -x "*.git*" ) || { echo "zip failed"; exit 1; }
           else
-            echo "Packaging entire detected path: $DATAPACK_PATH"
-            (cd "$DATAPACK_PATH" && zip -r "$GITHUB_WORKSPACE/$ZIP_NAME" . -x "*.git*" ) || { echo "zip failed"; exit 1; }
+            echo "Packaging entire detected path: $RESOURCEPACK_PATH"
+            (cd "$RESOURCEPACK_PATH" && zip -r "$GITHUB_WORKSPACE/$ZIP_NAME" . -x "*.git*" ) || { echo "zip failed"; exit 1; }
           fi
 
           echo "zip=$ZIP_NAME" >> $GITHUB_OUTPUT
@@ -210,7 +194,7 @@ jobs:
       - name: Upload zip as artifact (for auditing/debug)
         uses: actions/upload-artifact@v4
         with:
-          name: datapack-zip
+          name: resourcepack-zip
           path: ${{ github.workspace }}/${{ steps.package.outputs.zip }}
 
       - name: Compute SHA256 of generated zip
@@ -276,8 +260,8 @@ jobs:
             BODY="${{ steps.inputs.outputs.changelog_override }}"
           elif [ -f CHANGELOG.md ]; then
             BODY="$(cat CHANGELOG.md)"
-          elif [ -f "${{ steps.detect.outputs.datapack_path }}/pack.mcmeta" ]; then
-            DESC="$(jq -r '.pack.description // empty' "${{ steps.detect.outputs.datapack_path }}/pack.mcmeta" 2>/dev/null || true)"
+          elif [ -f "${{ steps.detect.outputs.resourcepack_path }}/pack.mcmeta" ]; then
+            DESC="$(jq -r '.pack.description // empty' "${{ steps.detect.outputs.resourcepack_path }}/pack.mcmeta" 2>/dev/null || true)"
             if [ -n "$DESC" ]; then
               BODY="$DESC"
             fi
@@ -346,7 +330,6 @@ jobs:
           ZIP_PATH="$GITHUB_WORKSPACE/$ZIP_NAME"
           VERSION="${{ steps.version.outputs.version }}"
           GAME_VERSIONS_RAW="${{ steps.inputs.outputs.game_versions }}"
-          LOADERS_RAW="${{ steps.inputs.outputs.loaders_raw }}"
           CHANGELOG_OVERRIDE="${{ steps.inputs.outputs.changelog_override }}"
           VERSION_TYPE="${{ steps.inputs.outputs.version_type }}"
           CREATE_GH_RELEASE="${{ steps.inputs.outputs.create_github_release }}"
@@ -392,8 +375,8 @@ jobs:
             if [ -z "${CHANGELOG:-}" ]; then
               if [ -f CHANGELOG.md ]; then
                 CHANGELOG="$(cat CHANGELOG.md)"
-              elif [ -f "${{ steps.detect.outputs.datapack_path }}/pack.mcmeta" ]; then
-                DESC="$(jq -r '.pack.description // empty' "${{ steps.detect.outputs.datapack_path }}/pack.mcmeta" 2>/dev/null || true)"
+              elif [ -f "${{ steps.detect.outputs.resourcepack_path }}/pack.mcmeta" ]; then
+                DESC="$(jq -r '.pack.description // empty' "${{ steps.detect.outputs.resourcepack_path }}/pack.mcmeta" 2>/dev/null || true)"
                 if [ -n "$DESC" ]; then
                   CHANGELOG="$DESC"
                 fi
@@ -417,13 +400,8 @@ jobs:
 
           # Build JSON arrays robustly and output compact JSON (-c).
           GAME_JSON="$(printf '%s' "$GAME_VERSIONS_RAW" | jq -R -s 'split(",") | map(.|gsub("^\\s+|\\s+$";"")) | map(select(length>0))')"
-          LOADERS_JSON="$(printf '%s' "$LOADERS_RAW" | jq -R -s '
-            split(",")
-            | map(.|gsub("^\\s+|\\s+$";""))
-            | map(select(length>0))
-            | map(if . == "data" then "minecraft" else . end)
-            | if length == 0 then ["minecraft"] else . end
-          ')"
+          # Resource packs always use the Minecraft loader
+          LOADERS_JSON='["minecraft"]'
 
           REPO_NAME="${GITHUB_REPOSITORY##*/}"
           DATA_JSON="$(jq -c -n \
@@ -538,31 +516,9 @@ jobs:
             exit 1
           fi
 
-      - name: Optionally create GitHub release (guarded)
-        if: ${{ steps.inputs.outputs.create_github_release == 'true' && github.event_name != 'release' }}
-        run: |
-          set -euo pipefail
-          TAG="v${{ steps.version.outputs.version }}"
-          OWNER_REPO="${GITHUB_REPOSITORY}"
-          # Check whether a release for this tag already exists
-          HTTP="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: token ${GITHUB_TOKEN}" "https://api.github.com/repos/${OWNER_REPO}/releases/tags/${TAG}" || true)"
-          if [ "$HTTP" = "200" ]; then
-            echo "A GitHub release for tag ${TAG} already exists. Skipping creation."
-            exit 0
-          fi
-          # Create release using the release body equal to the same changelog used for Modrinth
-          RELEASE_BODY="${CHANGELOG:-"Automated release for ${TAG}"}"
-          echo "Creating GitHub release ${TAG}..."
-          curl -sS -X POST \
-            -H "Authorization: token ${GITHUB_TOKEN}" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${OWNER_REPO}/releases" \
-            -d "$(jq -n --arg tag_name "$TAG" --arg name "$TAG" --arg body "$RELEASE_BODY" '{ tag_name: $tag_name, name: $name, body: $body, draft: false, prerelease: false }')" \
-            | jq -r '.html_url // "created"'
-
       - name: Success message
         if: success()
         run: |
-          echo "Datapack process completed."
+          echo "Resource pack process completed."
           echo "Modrinth version id: ${{ steps.publish_modrinth.outputs.modrinth_version_id }}"
           echo "Modrinth version URL: ${{ steps.publish_modrinth.outputs.modrinth_version_url }}"

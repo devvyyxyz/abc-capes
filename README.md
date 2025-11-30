@@ -1,58 +1,90 @@
-# ABC Template Datapack
+![abc: capes](https://cdn.modrinth.com/data/cached_images/159fa23ba217a3f93a2f860372422bd2466da371.png)
+A collection of all official Minecraft capes as well as unused, unobtainable capes and community capes.
 
-A Minecraft datapack template compatible with versions 1.16-1.21.
+On the version page, simply choose your Minecraft version and then select the cape you want to download.
 
-## Installation
+## Step-by-Step Guide
 
-1. Download or clone this repository
-2. Copy the entire folder to your world's `datapacks` folder:
-   - Location: `.minecraft/saves/[Your World Name]/datapacks/`
-3. In-game, run `/reload` or restart the world
-4. You should see a confirmation message when the datapack loads
+1. **Open the Project Page**  
+   Visit the Modrinth, CurseForge, GitHub, or project website for the content you want to download.
 
-## Usage
+2. **Find the Versions or Files Section**  
+   Look for a tab or section labelled **Versions**, **Files**, **Releases**, or **Downloads**.
 
-This template includes basic examples to get you started:
+3. **Select Your Minecraft Version**  
+   - Locate a list or dropdown called **Version**, **Game Version**, or **Supported Versions**.  
+   - Pick the version that matches your Minecraft installation (e.g., *1.20.1*, *1.19.2*).
 
-### Example Commands
+4. **Choose the Correct File Type**  
+   The file type depends on the kind of content:  
+   - **Mods:** `.jar`  
+   - **Plugins:** `.jar`  
+   - **Addons (Bedrock):** `.mcaddon` / `.mcpack`  
+   - **Texture Packs:** `.zip`  
+   - **Data Packs:** `.zip` or extracted folder  
+   - **Capes / Skin Addons:** whichever format the creator provides  
 
-- `/function abc:example` - Gives the player a diamond (example function)
+5. **Download the File**  
+   Click the **Download**, **Get**, or **File** button next to the version you need.  
+   Save the file to your device.
 
-### Structure
+6. **Install According to Content Type**  
+   - **Mods:** place the `.jar` inside `.minecraft/mods`.  
+   - **Plugins:** move the `.jar` into your server’s `plugins` folder.  
+   - **Texture Packs:** place the `.zip` into `.minecraft/resourcepacks`.  
+   - **Data Packs:** put inside `world/datapacks`.  
+   - **Addons (Bedrock):** double-click `.mcaddon` or `.mcpack` to import automatically.  
 
-```
-abc-template/
-├── pack.mcmeta                           # Datapack metadata
-├── data/
-│   ├── abc/                              # Main namespace
-│   │   └── functions/
-│   │       ├── load.mcfunction           # Runs on datapack load/reload
-│   │       ├── tick.mcfunction           # Runs every game tick
-│   │       └── example.mcfunction        # Example custom function
-│   └── minecraft/
-│       └── tags/
-│           └── functions/
-│               ├── load.json             # Load function tag
-│               └── tick.json             # Tick function tag
-```
+7. **Restart Minecraft or Your Server**  
+   Reload or restart to apply the new content.
 
-## Version Compatibility
 
-- **Pack Format**: 10
-- **Minecraft Versions**: 1.16 - 1.21
-- Tested and working across all versions in this range
+## Account-related capes
+> ![The pan cape](https://cdn.modrinth.com/data/cached_images/ca2f7ab8627da8392f35f3fc1d9fe49cfc7ddc16.png)
+> ![Migrator cape](https://cdn.modrinth.com/data/cached_images/7f03e3a523b23ad955a98e55d5091d5ae47bd45f.png)
+> ![Vanilla cape](https://cdn.modrinth.com/data/cached_images/f56b908356d02824e00c5aea5b6873fcfb9ca61f.png)
+> ![Common cape](https://cdn.modrinth.com/data/cached_images/504fa7a567f8e125f984d492786252c5c2552a03.png)
 
-## Customization
+## Staff capes
+_coming soon_
+> ![Classic mojang cape](https://cdn.modrinth.com/data/cached_images/db505db86d8fe9aea15cf4ae77c5af6374f4419c.png)
+> ![Xbox cape](https://cdn.modrinth.com/data/cached_images/c3381545be534ae39e00280f53938d7742e063e2.png)
+> ![Mojang cape](https://cdn.modrinth.com/data/cached_images/91b583a3d8dc7fcda6fc72e0654f54ada0323ab6.png)
+> ![Mojang studios cape](https://cdn.modrinth.com/data/cached_images/540797ecf1dc5109c80e9f3fe866673bd922f09a.png)
 
-1. Add your custom functions in `data/abc/functions/`
-2. Modify `load.mcfunction` to run setup commands when the datapack loads
-3. Modify `tick.mcfunction` to add repeating logic (runs 20 times per second)
-4. Create additional namespaces by adding folders under `data/`
+## Physical event capes
+_coming soon_
 
-## Contributing
+## Virtual event capes
+_coming soon_
 
-Feel free to use this template as a starting point for your own Minecraft datapacks!
+## Personal capes
+_coming soon_
 
-## License
+## Competition capes
+_coming soon_
 
-See LICENSE file for details.
+## Volunteer capes
+_coming soon_
+
+## Temporary capes
+_coming soon_
+
+## Unknown capes
+_coming soon_
+
+## API testing capes
+_coming soon_
+
+## Vote Update capes
+_coming soon_
+
+## MINECON 2011 cloak vote
+_coming soon_
+
+## Customer support tool capes
+_coming soon_
+![Birthday Cape](https://cdn.modrinth.com/data/cached_images/57fc5cf65f6f6a8fc494963b53bb280a07dc901a.png)
+
+
+_All capes can be found on [the Minecraft wiki](https://minecraft.wiki/w/Cape)._
