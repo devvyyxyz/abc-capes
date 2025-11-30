@@ -43,15 +43,15 @@ jobs:
         id: build
         run: |
           set -euo pipefail
-          # Read README.md into a JSON string safely using jq
-          README_CONTENT=$(jq -Rs '.' README.md)
-          # Create object with description field
-          DATA_JSON=$(jq -n --argdesc "$(jq -Rs '.' README.md)" '{ description: ($argdesc|fromjson) }' --argjson argdesc "$(jq -Rs '.' README.md)") || true
-          # Fallback safe method if above is problematic
-          if [ -z "$DATA_JSON" ] || [ "$DATA_JSON" = "null" ]; then
-            DESC_RAW="$(cat README.md)"
-            DATA_JSON=$(jq -n --arg d "$DESC_RAW" '{ description: $d }')
-          fi
+          # Read the README
+          BODY_RAW="$(cat README.md)"
+
+          # Build a short description: first non-empty line, strip leading markdown header markers, and truncate to 250 chars
+          SHORT_DESC="$(awk 'NF{print; exit}' README.md | sed -E 's/^#+ *//; s/\[(.*)\]\(.*\)/\1/g' | tr -d '\r' | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+          SHORT_DESC="$(printf '%s' "$SHORT_DESC" | cut -c1-250)"
+
+          # Create JSON payload with only the long 'body' (do not change the short summary/description)
+          DATA_JSON=$(jq -n --arg body "$BODY_RAW" '{ body: $body }')
           echo "$DATA_JSON" > /tmp/modrinth_payload.json
           echo "payload_path=/tmp/modrinth_payload.json" >> $GITHUB_OUTPUT
 
